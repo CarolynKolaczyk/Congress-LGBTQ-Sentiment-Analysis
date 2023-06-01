@@ -1,0 +1,665 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Cmd+Shift+Enter*. 
+
+```{r}
+pacman::p_load(dplyr,
+               quanteda,
+               ggplot2, 
+               stringi,
+               patchwork) 
+```
+
+## Testing
+```{r}
+# try getting data processed in python, extracting speeches and searching for lgbt
+data_114 = read.csv('../Project/Data/processed_data_114.csv')
+# drop doubled index column
+data_114 <- data_114[,-1]
+head(data_114)
+```
+```{r}
+# split into Dem and Rep
+data_dem <- data_114[data_114$party == 'D',]
+data_rep <- data_114[data_114$party == 'R',]
+print(dim(data_dem))
+print(dim(data_rep))
+```
+```{r}
+# make 2 corpuses?
+corp_dem <- corpus(data_dem, text_field='speech')
+corp_rep <- corpus(data_rep, text_field='speech')
+head(corp_dem)
+```
+```{r}
+# test for combining all speeches
+dem_speeches <- paste(data_dem$speech, collapse = " ")
+# use kwic function to get window around words!
+
+# tokenize 
+dem_toks <- tokens(corp_dem, 
+                   remove_punct=TRUE, 
+                   remove_symbols=TRUE)
+
+kwic_lgbt <- kwic(dem_toks,
+                  pattern='lgbt|trans$|gay|transgender|bisexual|lesbian|queer|asexual|intersex|nonbinary',
+                  valuetype = 'regex',
+                  window = '10',
+                  case_insensitive = TRUE) # 1037 -> 1040
+# is it an issue that I get repeated context?
+
+# just sentences: ** DO THIS **
+sentences <- unlist(stri_split(str = dem_speeches, regex = "(?<=[?!.])\\s"))
+query_in_sentence <- stri_detect_regex(str = sentences, 
+                                 pattern = "lgbt|trans$|gay|transgender|bisexual|lesbian|queer|asexual|intersex|nonbinary") 
+lgbt_sentences <- sentences[query_in_sentence] # 348 -> 352
+# potential issue: some sentences are 1 word long, so losing context
+
+#  I could just use speeches where they mention lgbt, but idk how long speeches are?
+
+```
+
+
+## Gay Marriage
+### Aggregated over date, not session
+
+```{r}
+# create function that I can use later with lapply
+get_lgbt_data <- function(speech){
+  # convert speech to lower case
+  speech = tolower(speech)
+  search = "lgbt|trans$|gay|transgender|bisexual|lesbian|queer|asexual|intersex|nonbinary"
+  # split into sentences
+  sentences<- unlist(stri_split(str = speech, regex = "(?<=[?!.])\\s"))
+  # search for lgbt query
+  query <- stri_detect_regex(str = sentences, pattern = search) 
+  # get lgbt sentences only, combine into 1 document each
+  lgbt <- paste(sentences[query], collapse=" ")
+  return(lgbt)
+}
+
+# create new function, then apply to all states like before
+df_marriage <- read.csv('../Project/Data/marriage_law_dates.csv')
+ids = c('097', '098', '099', '100', '101', '102', '103', '104', '105', 
+       '106', '107', '108', '109', '110', '111', '112', '113', '114')
+
+#convert date from string to date
+df_marriage$Date <- as.Date(df_marriage$Date,format='%Y-%m-%d')
+
+# function
+get_split_data<- function(state_id){
+  # initialize empty dataframe (to hold all info for this state)
+  # get date where legislation passed
+  df_full_made = FALSE # boolean to know when to initialize df_full
+  legislation_date = df_marriage[df_marriage$State == state_id,]$Date
+  for (session_id in ids){
+    print(paste('Processing session', session_id))
+    # read in session data
+    file_name = paste('../Project/Data/processed_data_', session_id,'.csv', sep='')
+    data = read.csv(file_name)
+    # drop doubled index column
+    data <- data[,-1]
+    # convert data to data type
+    data$date <- as.Date(data$date,format='%Y-%m-%d')
+    # filter by this state
+    state_data <- data[data$state == state_id,]
+    # filter so party is only D or R
+    state_data <- state_data[state_data['party'] == 'R' | state_data['party'] == 'D',]
+    # get only speech, state, party, date
+    state_data <- state_data[,c('party', 'state', 'speech', 'date')]
+    #print(colnames(state_data)) # party, state, speech, date
+    
+    # group by date and party, paste speeches together
+    state_data <- state_data %>% 
+      group_by(date, party, state) %>% 
+      summarise(text = paste(speech, collapse = " "))
+    #print(colnames(state_data)) # date, party, state, text 
+    # apply lgbt function to columns!
+    state_data$text <- unlist(lapply(state_data$text, get_lgbt_data))
+    # drop blank columns
+    state_data <- state_data[state_data$text != "",]
+    # add column with before_after flag
+    state_data$before_after <- ifelse(state_data$date <legislation_date, 'before', 'after')
+    
+    if(dim(state_data)[1] == 0){
+      next
+    }
+    
+    if (df_full_made == FALSE){
+      df_full = state_data
+      df_full_made = TRUE
+    }
+    else{
+      df_full = rbind(df_full, state_data)
+    }
+  }
+  return(df_full)
+} 
+
+```
+
+```{r}
+# run above function on all states who legalized gay marriage 
+# before the supreme court decision
+
+states = df_marriage$State
+
+# iterate over all states
+for (state_id in states){
+  print(paste('State:', state_id))
+  df <- get_split_data(state_id)
+  if (state_id == 'CT'){
+    df_all_states = df
+  }
+  else{
+    df_all_states = rbind(df_all_states, df)
+  }
+}
+
+# save to csv
+file_name = '../Project/Data/state_legalized_marriage_equality_lgbt_data.csv'
+write.csv(df_all_states, file_name)
+```
+
+### Sentiment Analysis
+```{r}
+# read in data
+# file_name = '../Project/Data/all_state_level_marriage_equality_lgbt.csv'
+file_name = '../Project/Data/state_legalized_marriage_equality_lgbt_data.csv'
+lgbt_data <- read.csv(file_name)
+lgbt_data <- lgbt_data[,-1]
+dim(lgbt_data)
+head(lgbt_data)
+```
+```{r}
+# start by trying word dictionaries like in HW2
+# remove apostrophes
+lgbt_data$text <- gsub(pattern = "'", "", lgbt_data$text) 
+# create corpus
+corp <- corpus(lgbt_data, text_field = 'text')
+
+# create dfm, removing punctuation and setting to lower
+dfm <- tokens(corp, remove_punct = TRUE) %>% 
+  dfm(tolower=TRUE)
+
+# read in positive and negative words from HW2 - (Hu & Liu (2004))
+positive_words <- read.csv('../HW/HW2/positive-words.txt', sep='\n', header=FALSE)
+negative_words <- read.csv('../HW/HW2/negative-words.txt', sep='\n', header=FALSE)
+names(negative_words) <- "word"
+names(positive_words) <- "word"
+# create lists 
+negative_words <- negative_words$word
+positive_words <- positive_words$word
+
+# generate sentiment score
+# get dfm of only positive words
+dfm_positive_words <- dfm %>% dfm_select(positive_words)
+# get dfm of only negative words
+dfm_negative_words <- dfm %>% dfm_select(negative_words)
+
+# get counts of words (tokens) per document
+count_neg_words <- ntoken(dfm_negative_words)
+count_pos_words <- ntoken(dfm_positive_words)
+
+# get difference in these counts (# pos - # neg)
+sentiment_score <- count_pos_words - count_neg_words
+
+# add this into docvars for dfm_reviews
+docvars(dfm, "sentiment_score" ) <- sentiment_score
+
+# create histogram to visualize distibution of sentiment score over all docs
+p <- ggplot() + aes(sentiment_score) + 
+  geom_histogram(binwidth=1, colour="black", fill="white") +
+  ggtitle("Distribution of Sentiment Score") +
+  theme(plot.title = element_text(size=15, hjust=0.5))
+p
+
+```
+
+```{r}
+# now look at:
+# D vs R overall
+D_scores <- dfm_subset(dfm, party == 'D')$sentiment_score
+R_scores <- dfm_subset(dfm, party == 'R')$sentiment_score
+
+p_D <- ggplot() + aes(D_scores) + 
+  geom_histogram(binwidth=1, colour="black", fill="white") +
+  ggtitle("Distribution of Democrat Sentiment Score") +
+  theme(plot.title = element_text(size=15, hjust=0.5))
+p_R <- ggplot() + aes(R_scores) + 
+  geom_histogram(binwidth=1, colour="black", fill="white") +
+  ggtitle("Distribution of Republican Sentiment Score") +
+  theme(plot.title = element_text(size=15, hjust=0.5))
+
+p_D / p_R #& scale_y_continuous(limits = c(0, 80)) & scale_x_continuous(limits = c(-70, 25))
+
+# before vs after overall
+before_scores <- dfm_subset(dfm, before_after == 'before')$sentiment_score
+after_scores <- dfm_subset(dfm, before_after == 'after')$sentiment_score
+# plot
+p_before <- ggplot() + aes(before_scores) + 
+  geom_histogram(binwidth=1, colour="black", fill="white") +
+  ggtitle("Distribution of Sentiment Score Pre-Legalization") +
+  theme(plot.title = element_text(size=15, hjust=0.5))
+p_after <- ggplot() + aes(after_scores) + 
+  geom_histogram(binwidth=1, colour="black", fill="white") +
+  ggtitle("Distribution of Overall Sentiment Score Post-Legalization") +
+  theme(plot.title = element_text(size=15, hjust=0.5))
+p_before / p_after
+#& scale_y_continuous(limits = c(0, 90)) & scale_x_continuous(limits = c(-70, 25))
+
+# D vs R vs before vs after (4 plots)
+D_before <- dfm_subset(dfm, party == 'D' & before_after=='before')$sentiment_score
+D_after <- dfm_subset(dfm, party == 'D' & before_after=='after')$sentiment_score
+R_before <- dfm_subset(dfm, party == 'R' & before_after=='before')$sentiment_score
+R_after <- dfm_subset(dfm, party == 'R' & before_after=='after')$sentiment_score
+# plot
+p_D_before <- ggplot() + aes(D_before) + 
+  geom_histogram(binwidth=1, colour="black", fill="white") +
+  ggtitle("Democrats Pre-Legalization") +
+  theme(plot.title = element_text(size=15, hjust=0.5))
+p_D_after <- ggplot() + aes(D_after) + 
+  geom_histogram(binwidth=1, colour="black", fill="white") +
+  ggtitle("Democrats Post-Legalization") +
+  theme(plot.title = element_text(size=15, hjust=0.5))
+p_R_before <- ggplot() + aes(R_before) + 
+  geom_histogram(binwidth=1, colour="black", fill="white") +
+  ggtitle("Republicans Pre-Legalization") +
+  theme(plot.title = element_text(size=15, hjust=0.5))
+p_R_after <- ggplot() + aes(R_after) + 
+  geom_histogram(binwidth=1, colour="black", fill="white") +
+  ggtitle("Republicans Post-Legalization") +
+  theme(plot.title = element_text(size=15, hjust=0.5))
+
+(p_D_before +p_R_before) / (p_D_after+p_R_after)
+
+```
+For Democrats vs Republicans:
+We can see that both distributions seem to be centered around zero, but the Democrats distribution seems to be ever so slightly left skewed?
+
+For before vs after:
+Both seem to be centered around zero
+
+For D vs R, before vs after:
+We can see that there are much less data points for after legalization. This makes it difficult to do comparison, especially for Republicans. However, this can also be informative, as it tells us Republicans are discussing lgbtq subjects much less than Democrats. 
+
+
+```{r}
+# average sentiment score for each
+print(paste('Avg Sentiment Score for Democrats', mean(D_scores)))
+print(paste('Avg Sentiment Score for Republicans', mean(R_scores)))
+
+```
+Interesting... both scores are negative but Democrat one is more negative! Not what I expected
+
+** (Add avg sentiment score for other states not included here, for comparison) ** 
+
+```{r}
+# calculate avg score before and after, for both D and R
+
+# print
+print(paste('Avg Sentiment Score for Democrats Before', mean(D_before)))
+print(paste('Avg Sentiment Score for Democrats After', mean(D_after)))
+print(paste('Avg Sentiment Score for Republicans Before', mean(R_before)))
+print(paste('Avg Sentiment Score for Republicans After', mean(R_after)))
+```
+We can see that in both cases, the average sentiment scores increases after gay marriage is legalized. It increases by 0.1675 for the Democrats, and 0.3746 for the Republicans. Again, not what I would have expected, but interesting. It seems that Republicans sentiment about lgbt issues increases more after legalization than Democrats. This could make sense if we think about how many/most Democrats already support gay marriage, so it makes sense that their stance wouldn't be as affected by legalization. 
+(Maybe doing confidence intervals will make these differences less significant? Can I even do confidence intervals since it's not really a sample?)
+
+#### Extreme Examples
+Looking at documents with highest and lowest sentiment scores, to evaluate accuracy of our metric
+```{r}
+# add sentiment score to corp
+docvars(corp) <- docvars(dfm)
+# get sentiment scores
+scores <- docvars(corp, 'sentiment_score')
+scores <- sort(scores)
+# get top 5 and bottom 5 values
+top_5 <- head(scores)
+bottom_5 <- tail(scores)
+top_5
+bottom_5
+```
+```{r}
+# get most negative doc
+print(as.character(corpus_subset(corp, sentiment_score==-51)))
+print(as.character(corpus_subset(corp, sentiment_score==-19)))
+print(as.character(corpus_subset(corp, sentiment_score==16)))
+print(as.character(corpus_subset(corp, sentiment_score==13)))
+```
+text594: (most neg)
+Discussing murder of private barry winchell, following anti-gay harassment. Criticizing fort campbell and general clark them for not responding better to the harassment before it escalated, and not condemning anti-gay harassment in statements following the murder. 
+
+text718:
+Talking about how there are no protections for gay students in school against harassment. Talk about student who was killed by a classmate who suspected he was gay. Criticizing schools and teachers and lack of laws in plae protecting gay students. 
+
+text 1712: (most positive)
+Speaks in support of allowing gay and lesbian service men/woman to serve in the army, quotes/refers to current service members who also support it
+
+text1383:
+During pride month, describing how Washington recently became one of 12 states where gay marriage is now legal, and how proud they are of the progress and of the community.
+
+
+```{r}
+# get info about these texts
+print(docvars(corpus_subset(corp, sentiment_score==-51)))
+print(docvars(corpus_subset(corp, sentiment_score==-19)))
+print(docvars(corpus_subset(corp, sentiment_score==16)))
+print(docvars(corpus_subset(corp, sentiment_score==13)))
+```
+
+```{r}
+# print legalization date for these states to see how close to it these are
+df_marriage[df_marriage$State == 'MA',]$Date
+df_marriage[df_marriage$State == 'MN',]$Date
+df_marriage[df_marriage$State == 'CA',]$Date
+df_marriage[df_marriage$State == 'WA',]$Date
+```
+None are super close, except for the most negative example, which comes from MA, and is about 6 months before.
+
+### Comparing with states that didn't legalize gay marriage on their own
+```{r}
+# function that gets lgbt data but doesn't add before_after
+
+get_data_other_states<- function(state_id){
+  # initialize empty dataframe (to hold all info for this state)
+  # get date where legislation passed
+  df_full_made = FALSE # boolean to know when to initialize df_full
+  for (session_id in ids){
+    # print(paste('Processing session', session_id))
+    # read in session data
+    file_name = paste('../Project/Data/processed_data_', session_id,'.csv', sep='')
+    data = read.csv(file_name)
+    # drop doubled index column
+    data <- data[,-1]
+    # convert data to data type
+    data$date <- as.Date(data$date,format='%Y-%m-%d')
+    # filter by this state
+    state_data <- data[data$state == state_id,]
+    # filter so party is only D or R
+    state_data <- state_data[state_data['party'] == 'R' | state_data['party'] == 'D',]
+    # get only speech, state, party, date
+    state_data <- state_data[,c('party', 'state', 'speech', 'date')]
+
+    # group by date and party, paste speeches together
+    state_data <- state_data %>% 
+      group_by(date, party, state) %>% 
+      summarise(text = paste(speech, collapse = " "))
+    # apply lgbt function to columns!
+    state_data$text <- unlist(lapply(state_data$text, get_lgbt_data))
+    # drop blank columns
+    state_data <- state_data[state_data$text != "",]
+    
+    if(dim(state_data)[1] == 0){
+      next
+    }
+    
+    if (df_full_made == FALSE){
+      df_full = state_data
+      df_full_made = TRUE
+    }
+    else{
+      df_full = rbind(df_full, state_data)
+    }
+  }
+  return(df_full)
+} 
+```
+
+```{r, results='hide'}
+# states that only legalized marriaged due to supreme court decision
+states = c('AL', 'AK', 'AZ', 'AR', 'CO',	'FL', 'GA', 'ID', 'IN', 'KS', 'KY', 'LA', 
+'MI', 'MS', 'MO', 'MT', 'NE', 'NC', 'ND', 'OH', 'OK', 'OR', 'PA', 'SC', 'SD', 
+'TN', 'TX', 'UT', 'WV', 'WI', 'WY')
+
+ids = c('097', '098', '099', '100', '101', '102', '103', '104', '105', 
+       '106', '107', '108', '109', '110', '111', '112', '113', '114')
+
+# iterate over all states
+df_initialized = FALSE
+for (state_id in states){
+  print(paste('State:', state_id))
+  df <- get_data_other_states(state_id)
+  
+  # don't save if df is empty
+  if(dim(df)[1] == 0){
+      print(paste('Nothing for', state_id))
+      next
+    }
+    
+  if (df_initialized == FALSE){
+    df_all_states = df
+    df_initialized  = TRUE
+  }
+  else{
+    df_all_states = rbind(df_all_states, df)
+  }
+}
+
+# save to csv
+file_name = '../Project/Data/state_not_legalized_lgbt_data.csv'
+write.csv(df_all_states, file_name)
+```
+
+#### Analyze data from other state, for comparison
+```{r}
+# read in data
+file_name = '../Project/Data/state_not_legalized_lgbt_data.csv'
+not_legalized_data <- read.csv(file_name)
+not_legalized_data <- not_legalized_data[,-1]
+dim(not_legalized_data)
+head(not_legalized_data)
+```
+```{r}
+# analysis
+# start by trying word dictionaries like in HW2
+# remove apostrophes
+not_legalized_data$text <- gsub(pattern = "'", "", not_legalized_data $text) 
+# create corpus
+corp_2 <- corpus(not_legalized_data, text_field = 'text')
+
+# create dfm, removing punctuation and setting to lower
+dfm_2 <- tokens(corp_2, remove_punct = TRUE) %>% 
+  dfm(tolower=TRUE)
+
+# read in positive and negative words from HW2 - (Hu & Liu (2004))
+positive_words <- read.csv('../HW/HW2/positive-words.txt', sep='\n', header=FALSE)
+negative_words <- read.csv('../HW/HW2/negative-words.txt', sep='\n', header=FALSE)
+names(negative_words) <- "word"
+names(positive_words) <- "word"
+# create lists 
+negative_words <- negative_words$word
+positive_words <- positive_words$word
+
+# generate sentiment score
+# get dfm of only positive words
+dfm_positive_words <- dfm_2 %>% dfm_select(positive_words)
+# get dfm of only negative words
+dfm_negative_words <- dfm_2 %>% dfm_select(negative_words)
+
+# get counts of words (tokens) per document
+count_neg_words <- ntoken(dfm_negative_words)
+count_pos_words <- ntoken(dfm_positive_words)
+
+# get difference in these counts (# pos - # neg)
+sentiment_score <- count_pos_words - count_neg_words
+
+# add this into docvars for dfm_reviews
+docvars(dfm_2, "sentiment_score" ) <- sentiment_score
+
+# create histogram to visualize distibution of sentiment score over all docs
+p <- ggplot() + aes(sentiment_score) + 
+  geom_histogram(binwidth=1, colour="black", fill="white") +
+  ggtitle("Distribution of Sentiment Score - Other States") +
+  theme(plot.title = element_text(size=15, hjust=0.5))
+p
+```
+Again, seems to be centered at zero. 
+
+```{r}
+# D vs R overall
+D_scores <- dfm_subset(dfm_2, party == 'D')$sentiment_score
+R_scores <- dfm_subset(dfm_2, party == 'R')$sentiment_score
+
+p_D <- ggplot() + aes(D_scores) + 
+  geom_histogram(binwidth=1, colour="black", fill="white") +
+  ggtitle("Democrat Sentiment Score - Other States") +
+  theme(plot.title = element_text(size=15, hjust=0.5))
+p_R <- ggplot() + aes(R_scores) + 
+  geom_histogram(binwidth=1, colour="black", fill="white") +
+  ggtitle("Republican Sentiment Score - Other States") +
+  theme(plot.title = element_text(size=15, hjust=0.5))
+
+p_D / p_R #& scale_y_continuous(limits = c(0, 80)) & scale_x_continuous(limits = c(-70, 25))
+```
+
+```{r}
+# average sentiment score for each
+print(paste('Avg Sentiment Score for Democrats - other states', mean(D_scores)))
+print(paste('Avg Sentiment Score for Republicans - other states', mean(R_scores)))
+```
+Interestingly, for states that did not legalize gay marriage on their own, we have a very slightly positive average sentiment score for Democrats, and a negative average sentiment score for Republicans. (Use this to compare to states that did legalize gay marriage on their own)
+
+```{r}
+# Do a scatter plot, with averages across dates (by Republican and Democrat, legalized on their own and didn't)
+
+Dem_not_legalize <- docvars(dfm_subset(dfm_2, party == 'D'))[,c('date', 'sentiment_score')]
+Rep_not_legalize <- docvars(dfm_subset(dfm_2, party == 'R'))[,c('date', 'sentiment_score')]
+
+# average over date
+# nl stands for not legalized
+Avg_score_dem_nl <- Dem_not_legalize %>% group_by(date) %>% 
+      summarise(avg_score = mean(sentiment_score))
+Avg_score_rep_nl <- Rep_not_legalize %>% group_by(date) %>% 
+      summarise(avg_score = mean(sentiment_score))
+# add columns for party, to use in plotting
+Avg_score_dem_nl$party = 'D'
+Avg_score_rep_nl$party = 'R'
+# combine into one dataframe
+avg_score_nl = rbind(Avg_score_dem_nl, Avg_score_rep_nl)
+avg_score_nl$date <- as.Date(avg_score_nl$date)
+
+# scatter plot
+ggplot(avg_score_nl, aes(x=date, y=avg_score, color=party)) + 
+  geom_point() +
+  scale_color_manual(values=c('blue','red')) + 
+  labs(title="Avg Sentiment Score by Date", 
+       subtitle="Non Self-Legalizing States") +
+  scale_x_date(breaks = scales::breaks_pretty(10)) +
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 14),    # Center title position and size
+    plot.subtitle = element_text(hjust = 0.5),            # Center subtitle
+  )
+
+```
+
+
+```{r}
+# make plot
+Dem_l <- docvars(dfm_subset(dfm, party == 'D'))[,c('date', 'sentiment_score')]
+Rep_l<- docvars(dfm_subset(dfm, party == 'R'))[,c('date', 'sentiment_score')]
+
+# average over date
+# nl stands for not legalized
+Avg_score_dem_l <- Dem_l %>% group_by(date) %>% 
+      summarise(avg_score = mean(sentiment_score))
+Avg_score_rep_l <- Rep_l %>% group_by(date) %>% 
+      summarise(avg_score = mean(sentiment_score))
+# add columns for party, to use in plotting
+Avg_score_dem_l$party = 'D'
+Avg_score_rep_l$party = 'R'
+# combine into one dataframe
+avg_score_l = rbind(Avg_score_dem_l, Avg_score_rep_l)
+avg_score_l$date <- as.Date(avg_score_l$date)
+
+# scatter plot
+ggplot(avg_score_l, aes(x=date, y=avg_score, color=party)) + 
+  geom_point() +
+  scale_color_manual(values=c('blue','red')) + 
+  labs(title="Avg Sentiment Score by Date", 
+       subtitle="States that Legalized Gay Marriage") +
+  scale_x_date(breaks = scales::breaks_pretty(10)) +
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 14),    # Center title position and size
+    plot.subtitle = element_text(hjust = 0.5),            # Center subtitle
+  )
+```
+
+```{r}
+# show them one on top of the other, for comparison purposes
+p1 <- ggplot(avg_score_nl, aes(x=date, y=avg_score, color=party)) + 
+  geom_point() +
+  scale_color_manual(values=c('blue','red')) + 
+  labs(title="Avg Sentiment Score by Date", 
+       subtitle="Non Self-Legalizing States") +
+  scale_x_date(breaks = scales::breaks_pretty(10)) +
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 14),    # Center title position and size
+    plot.subtitle = element_text(hjust = 0.5),            # Center subtitle
+  )
+
+p2 <- ggplot(avg_score_l, aes(x=date, y=avg_score, color=party)) + 
+  geom_point() +
+  scale_color_manual(values=c('blue','red')) + 
+  labs(title="Avg Sentiment Score by Date", 
+       subtitle="States that Legalized Gay Marriage") +
+  scale_x_date(breaks = scales::breaks_pretty(10)) +
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 14),    # Center title position and size
+    plot.subtitle = element_text(hjust = 0.5),            # Center subtitle
+  )
+
+p1 / p2
+```
+
+We can see that for states that legalized gay marriage before the supreme court decision, Democrats have a higher range of sentiment scores in the years 2000+. Everything else sees to stay about the same, centered randomly around zero. Although we can also see on the second graph a period between about 1987 and 1997 with more negative points than usual. This most likely corresponds with the AIDS epidemic (add a source with dates for this).
+
+#### Extreme examples from other states
+```{r}
+docvars(corp_2) <- docvars(dfm_2)
+# get sentiment scores
+scores <- docvars(corp_2, 'sentiment_score')
+scores <- sort(scores)
+# get top 5 and bottom 5 values
+top_5 <- head(scores)
+bottom_5 <- tail(scores)
+top_5
+bottom_5
+```
+
+```{r}
+# print most neg, 2 most pos
+print(as.character(corpus_subset(corp_2, sentiment_score==-17)))
+print(as.character(corpus_subset(corp_2, sentiment_score==22)))
+print(as.character(corpus_subset(corp_2, sentiment_score==20)))
+```
+
+text1796 : doc with the most negative text. This is definitely rated correctly. The speeches in this doc are incredibly anti-trans. They are quoting articles from individuals who regretted their decision, and transgender individuals who are not against bathroom bills. They argue that being transgender is a mental illness and should have stayed classified as such, rather than being changed to gender dysphoria. They go on and on. Yikes. 
+
+text1799 : speeches in support of the lgbt community, of lgbt congress members, in honor of pride month. This makes sense for a very positive rating. 
+
+text1789 : Is celebrating victories for the lgbt community. References the upcoming supreme court decision, hopes they will legalize gay marriage. We even see some of the same points being made as in the previous text. 
+
+All in all, it seems the positive ones are during pride month. And the negative one is some anti-trans rhetoric. 
+
+```{r}
+# get info about these texts
+print(docvars(corpus_subset(corp_2, sentiment_score==-17)))
+print(docvars(corpus_subset(corp_2, sentiment_score==22)))
+print(docvars(corpus_subset(corp_2, sentiment_score==20)))
+```
+Interesting that these are all from Texas.
+
+
+# Research Question:
+- How does the passing of lgbt related legislation affect the attitudes of congress members towards the lgbt community?
+    - can edit a bit...
+    
+# Notes:
+- decided to do sentence level instead of kwic, because frequently people list lgbt as "lesbian, gay, bisexual, transgender", and so the same kwic context would turn up for each of those. 
+- when reading in data, some lines had encoding errors or format errors. Just dropped these lines.
