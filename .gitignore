@@ -6,3 +6,6 @@ hein-daily/
 
 # ignore processed data files
 processed_data*.csv
+
+# ignore .DS_Store file
+.DS_Store
