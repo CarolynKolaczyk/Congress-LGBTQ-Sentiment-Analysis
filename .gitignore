@@ -1,0 +1,8 @@
+# ignore ALL .log files
+*.log
+
+# ignore hein-daly data folder
+hein-daily/
+
+# ignore processed data files
+processed_data*.csv
