@@ -47,4 +47,14 @@ We also examine the distribution of sentiment scores by party and by date classi
 
 ![image](./sentiment_analysis_files/figure-gfm/unnamed-chunk-6-3.png)
 
+For comparison purposes, we next examine the sentiment scores of speech-text data by represen- tatives from states where same-sex marriage was not legal until the Obergefell v. Hodges decision. Similar to the distribution for states that legalized same-sex marriage, this distribution is centered at zero, although it does not appear to be skewed).
+
+![image](sentiment_analysis_files/figure-gfm/unnamed-chunk-16-1.png)
+
+Finally, we plot the sentiment scores of each generated document by date, for both categories of states and distinguishing by party.
+
+![image](sentiment_analysis_files/figure-gfm/unnamed-chunk-21-1.png)
+
+Unsurprisingly, all sentiment scores appear to be centered around zero regardless of date. However, we see that for states that legalized same-sex marriage before the Supreme Court decision, there is a larger variation in sentiment scores in the years after 2000. For states that legalized same-sex marriage, we also see that after the year 2000 there are many more Democratic data points than Republican. This is most likely due to the fact that these are liberal leaning states, and therefore are more likely to have Democratic representatives than Republican ones. Another interesting observation is that between approximately 1987 and 1997, for states that legalized same-sex marriage, there appears to be a greater number of larger magnitude negative sentiment scores than any other time period. This could perhaps correspond to the peak of the AIDs epidemic in the US.
+
 ## Extreme Examples
