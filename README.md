@@ -41,10 +41,10 @@ To evaluate the relationship between sentiment and same-sex marriage legalizatio
 ## Results
 For states who legalized same-sex marriage prior to federal legalization, we find that the overall distribution of sentiment scores appears to be centered at zero, indicating a neutral sentiment. 
 
-[!image](./sentiment_analysis_files/figure-gfm/unnamed-chunk-5-1.png)
+![image](./sentiment_analysis_files/figure-gfm/unnamed-chunk-5-1.png)
 
 We also examine the distribution of sentiment scores by party and by date classification (before or after legalization). All four distributions appear to be approximately centered at zero.
 
-[!image](./sentiment_analysis_files/figure-gfm/unnamed-chunk-6-3.png)
+![image](./sentiment_analysis_files/figure-gfm/unnamed-chunk-6-3.png)
 
 ## Extreme Examples
